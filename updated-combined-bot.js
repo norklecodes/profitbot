@@ -226,6 +226,8 @@ const bubbleBathGifs = [
   "https://media.giphy.com/media/cGITc1WexG0R7L3Api/giphy.gif?cid=ecf05e47f97un69mkz2unmff57f4gf2z2jrsgt05yledqz7d&ep=v1_gifs_search&rid=giphy.gif&ct=g",
   "https://media.giphy.com/media/0TNvEshFVlaSHdg7Wc/giphy.gif?cid=ecf05e47ihz3o0itpiu7zms5tqkyjj6m8t9qtbkw3cz5wqrv&ep=v1_gifs_search&rid=giphy.gif&ct=g"];
 
+  const yahooFinance = require('yahoo-finance2').default;
+
 // COIN AWARD SYSTEM
 function calculateCoins(profit) {
   if (profit <= 0) return 0;
@@ -274,52 +276,36 @@ function schedulePing(cronTime, message) {
   });
 }
 
-// FETCH FUTURES DATA USING ALPHA VANTAGE
+// FETCH FUTURES DATA USING YAHOO FINANCE
 async function fetchFuturesData() {
   try {
-    console.log('Attempting to fetch futures data from Alpha Vantage...');
+    console.log('Attempting to fetch futures data from Yahoo Finance...');
     
-    // Define the key futures symbols we want to fetch
+    // Define the futures contracts we want to fetch
     const futuresSymbols = [
-      { name: 'Gold', symbol: 'GC=F' },
-      { name: 'VIX', symbol: 'VX=F' },
-      { name: 'E-mini S&P 500', symbol: 'ES=F' },
-      { name: 'E-mini NASDAQ-100', symbol: 'NQ=F' }
+      { name: 'Gold', symbol: 'GC=F' }, // Gold futures (COMEX)
+      { name: 'E-mini S&P 500', symbol: 'ES=F' }, // E-mini S&P 500 futures (CME)
+      { name: 'E-mini NAS 100', symbol: 'NQ=F' } // E-mini NASDAQ-100 futures (CME)
     ];
 
     const futures = [];
     
     for (const { name, symbol } of futuresSymbols) {
-      const url = `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&apikey=${ALPHA_VANTAGE_API_KEY}`;
-      console.log(`Fetching data for ${name} (${symbol}) from ${url}`);
+      console.log(`Fetching data for ${name} (${symbol}) from Yahoo Finance...`);
       
-      const response = await axios.get(url);
-      const data = response.data;
+      // Fetch the latest quote using yahooFinance.quote()
+      const data = await yahooFinance.quote(symbol);
       
       console.log(`Response for ${name}:`, JSON.stringify(data, null, 2));
       
-      if (data['Error Message']) {
-        console.error(`Error fetching ${name} data:`, data['Error Message']);
+      if (!data || !data.regularMarketPrice || !data.regularMarketPreviousClose) {
+        console.error(`No valid data found for ${name}`);
         continue;
       }
       
-      // Extract the most recent daily data
-      const timeSeries = data['Time Series (Daily)'];
-      if (!timeSeries) {
-        console.error(`No time series data found for ${name}`);
-        continue;
-      }
-      
-      const latestDate = Object.keys(timeSeries)[0]; // Get the most recent date
-      const latestData = timeSeries[latestDate];
-      
-      if (!latestData) {
-        console.error(`No latest data found for ${name}`);
-        continue;
-      }
-      
-      const last = latestData['4. close'];
-      const previousClose = timeSeries[Object.keys(timeSeries)[1]]['4. close'];
+      // Extract the latest price and previous close
+      const last = data.regularMarketPrice.toFixed(2);
+      const previousClose = data.regularMarketPreviousClose.toFixed(2);
       const change = (parseFloat(last) - parseFloat(previousClose)).toFixed(2);
       const percentChange = (((parseFloat(last) - parseFloat(previousClose)) / parseFloat(previousClose)) * 100).toFixed(2) + '%';
       
@@ -334,7 +320,7 @@ async function fetchFuturesData() {
     console.log('Parsed futures data:', futures);
     return futures.length > 0 ? futures : null;
   } catch (error) {
-    console.error('Error fetching futures data from Alpha Vantage:', error.message);
+    console.error('Error fetching futures data from Yahoo Finance:', error.message);
     return null;
   }
 }
@@ -392,16 +378,16 @@ client.on('messageCreate', async message => {
       
       if (!futuresData || futuresData.length === 0) {
         console.log('Futures data is null or empty:', futuresData);
-        return message.reply('Failed to fetch futures data from Alpha Vantage. Please try again later. Check console logs for details.');
+        return message.reply('Failed to fetch futures data from Yahoo Finance. Please try again later. Check console logs for details.');
       }
       
-      // Format futures data into a single "box" using a code block
+      // Format futures data into a single "box" using a code block with even spacing
       let futuresBox = '```\n';
       futuresData.forEach(future => {
         const percent = future.percentChange;
         let changeColor = '';
         
-        if (percent.startsWith('+')) {
+        if (percent.startsWith('+') && parseFloat(percent) !== 0) {
           changeColor = '🟢';
         } else if (percent.startsWith('-')) {
           changeColor = '🔴';
@@ -409,7 +395,11 @@ client.on('messageCreate', async message => {
           changeColor = '⚪';
         }
         
-        futuresBox += `${future.name.padEnd(15)}: ${future.last.padEnd(10)} (${future.change} ${changeColor} ${future.percentChange})\n`;
+        // Apply consistent padding to each field
+        const namePadded = future.name.padEnd(15); // Adjust to fit longest name ("E-mini NAS 100")
+        const lastPadded = future.last.padEnd(10); // Price field
+        const changePadded = future.change.padEnd(10); // Change field
+        futuresBox += `${namePadded}: ${lastPadded} (${changePadded} ${changeColor} ${percent})\n`;
       });
       futuresBox += '```';
       
@@ -417,7 +407,7 @@ client.on('messageCreate', async message => {
         .setColor('#0099ff')
         .setTitle('Key Futures Prices')
         .setDescription(futuresBox)
-        .setFooter({ text: 'Data from Alpha Vantage | May be delayed' });
+        .setFooter({ text: 'Data from Yahoo Finance | May be delayed' });
       
       await message.channel.send({ embeds: [embed] });
     } catch (error) {
@@ -506,31 +496,31 @@ client.on('messageCreate', async message => {
     return;
   }
 
-// LOSS COMMAND 
-if (command === 'loss') {
-  const amount = parseFloat(args[0]);
-  if (isNaN(amount) || amount <= 0) {
-    return message.reply('Please provide a valid loss amount (e.g., !loss 500).');
+  // LOSS COMMAND 
+  if (command === 'loss') {
+    const amount = parseFloat(args[0]);
+    if (isNaN(amount) || amount <= 0) {
+      return message.reply('Please provide a valid loss amount (e.g., !loss 500).');
+    }
+
+    if (!userPnL[userId]) userPnL[userId] = { profit: 0, loss: 0 };
+    userPnL[userId].loss += amount;
+
+    const totalPnL = userPnL[userId].profit - userPnL[userId].loss;
+
+    let embed = new EmbedBuilder()
+      .setColor('#FF0000')
+      .setTitle('Loss Recorded! 📉')
+      .setDescription(`${message.author.username} lost $${amount.toFixed(2)}!`)
+      .addFields(
+        { name: 'Total Profit', value: `$${userPnL[userId].profit.toFixed(2)} (PnL: $${totalPnL.toFixed(2)})`, inline: false },
+        { name: 'Total Loss', value: `$${userPnL[userId].loss.toFixed(2)} (PnL: $${totalPnL.toFixed(2)})`, inline: false },
+        { name: 'Total Coins', value: (userCoins[userId] || 0).toString(), inline: true }
+      );
+
+    await message.channel.send({ embeds: [embed] });
+    return;
   }
-
-  if (!userPnL[userId]) userPnL[userId] = { profit: 0, loss: 0 };
-  userPnL[userId].loss += amount;
-
-  const totalPnL = userPnL[userId].profit - userPnL[userId].loss;
-
-  let embed = new EmbedBuilder()
-    .setColor('#FF0000')
-    .setTitle('Loss Recorded! 📉')
-    .setDescription(`${message.author.username} lost $${amount.toFixed(2)}!`)
-    .addFields(
-      { name: 'Total Profit', value: `$${userPnL[userId].profit.toFixed(2)} (PnL: $${totalPnL.toFixed(2)})`, inline: false },
-      { name: 'Total Loss', value: `$${userPnL[userId].loss.toFixed(2)} (PnL: $${totalPnL.toFixed(2)})`, inline: false },
-      { name: 'Total Coins', value: (userCoins[userId] || 0).toString(), inline: true }
-    );
-
-  await message.channel.send({ embeds: [embed] });
-  return;
-}
 
   // TIP COMMAND
   if (command === 'tip') {
